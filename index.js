@@ -983,20 +983,17 @@ client.on('message_create', async (msg) => {
         const remote = msg.id?.remote || '';
         const body   = msg.body || '';
 
+        // Restrict bot responses EXCLUSIVELY to the "Message Yourself" (Me-chat)
+        const selfJid = client.info?.wid?._serialized;
+        if (!selfJid || remote !== selfJid) {
+            return;
+        }
+
         // Write directly to file to bypass process output buffering
         const logMsg = `[LOG] ${new Date().toISOString()} remote="${remote}" from="${msg.from}" to="${msg.to}" fromMe=${msg.fromMe} body="${body.substring(0, 80)}"\n`;
         fs.appendFileSync(path.join(__dirname, 'bot.log'), logMsg);
 
         console.error(`[DEBUG] remote="${remote}" fromMe=${msg.fromMe} body="${body.substring(0, 80)}"`);
-
-        // Only respond inside the "Message Yourself" chat
-        const isGroup = remote.endsWith('@g.us');
-        const isNewsletter = remote.endsWith('@newsletter');
-        if (isGroup || isNewsletter) return;
-
-        // Fetch contact to check if it's the user's self-chat
-        const contact = await client.getContactById(remote);
-        if (!contact || !contact.isMe) return;
 
         // Normalize msg.from to match msg.id.remote for self-chat to satisfy the requested protection rule
         msg.from = remote;
