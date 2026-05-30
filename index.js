@@ -91,6 +91,7 @@ async function checkMarineWeather() {
 // 3. Initialize WhatsApp Web Client
 const client = new Client({
     authStrategy: new LocalAuth(),
+    authTimeoutMs: 300000,
     puppeteer: {
         executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
         args: ['--no-sandbox', '--disable-setuid-sandbox']
