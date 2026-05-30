@@ -980,14 +980,15 @@ client.on('ready', () => {
 // --- Message Listener ---
 client.on('message_create', async (msg) => {
     try {
+        // Restrict bot responses EXCLUSIVELY to the user's own messages in the self-chat (Me-chat)
+        if (msg.fromMe !== true) return;
+
         const remote = msg.id?.remote || '';
         const body   = msg.body || '';
 
-        // Restrict bot responses EXCLUSIVELY to the "Message Yourself" (Me-chat)
         const selfJid = client.info?.wid?._serialized;
-        if (!selfJid || remote !== selfJid) {
-            return;
-        }
+        const isSelfChat = selfJid ? (remote === selfJid) : (msg.from === msg.to);
+        if (!isSelfChat) return;
 
         // Write directly to file to bypass process output buffering
         const logMsg = `[LOG] ${new Date().toISOString()} remote="${remote}" from="${msg.from}" to="${msg.to}" fromMe=${msg.fromMe} body="${body.substring(0, 80)}"\n`;
