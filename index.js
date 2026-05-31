@@ -981,8 +981,13 @@ client.on('ready', () => {
 // --- Message Listener ---
 client.on('message_create', async (msg) => {
     try {
-        // Only process messages sent by the user themselves in their own self-chat (Me-chat)
-        if (msg.from !== msg.to) return;
+        // RAW DEBUG — fires for every single message before any filtering
+        console.log(`[DEBUG] Message caught! From: ${msg.from} | To: ${msg.to} | FromMe: ${msg.fromMe} | Body: ${msg.body}`);
+
+        // Only process messages in the "Notes to Self" (Me-chat)
+        const myNumber = client.info.wid._serialized;
+        const isNotesToSelf = (msg.fromMe && msg.to === myNumber) || (msg.from === myNumber && msg.to === myNumber);
+        if (!isNotesToSelf) return;
 
         const remote = msg.id?.remote || '';
         const body   = msg.body || '';
