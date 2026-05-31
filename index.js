@@ -701,9 +701,7 @@ async function sendMessageWithRetry(chat, messagePayload, retries = 2, delay = 2
 function buildGeminiToolsAndConfig() {
     const currentTime = new Date().toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
 
-    const tools = [
-        { googleSearch: {} },
-        {
+    const tools = [{
         functionDeclarations: [
             {
                 name: 'sendWhatsAppMessage',
@@ -908,7 +906,6 @@ function buildGeminiToolsAndConfig() {
     const dynamicConfig = {
         systemInstruction:
             `You are Aviad's Executive Assistant. You answer in Hebrew. The current time is ${currentTime}.\n` +
-            `- Use 'googleSearch' to answer questions with live information.\n` +
             `- Use 'sendEmail' to send emails.\n` +
             `- Use 'addTask' and 'readTasks' to manage his To-Do list on the 'מטלות' sheet.\n` +
             `- Continue managing his calendar, shopping list, and reminders.\n` +
@@ -1150,7 +1147,7 @@ client.on('message_create', async (msg) => {
                 }
             } catch (voiceErr) {
                 console.error('[ERROR] Failed to send reply:', voiceErr);
-                await client.sendMessage(msg.from, `🤖 ❌ שגיאה בעיבוד ההודעה הקולית: ${voiceErr.message?.substring(0, 80) || 'שגיאה לא ידועה'}`);
+                // Intentionally NOT sending error message to WhatsApp to prevent loop crashes
             }
             return;
         }
@@ -1176,10 +1173,11 @@ client.on('message_create', async (msg) => {
             }
         } catch (error) {
             console.error('[ERROR] Failed to send reply:', error);
-            const errMsg = error.status === 429
-                ? '🤖 ⚠️ מגבלת API זמנית (429). נסה שוב בעוד דקה.'
-                : `🤖 ❌ שגיאה: ${error.message?.substring(0, 100) || 'שגיאה לא ידועה'}`;
-            await client.sendMessage(msg.from, errMsg);
+            // Intentionally NOT sending error message to WhatsApp to prevent loop crashes
+            if (error.status === 429) {
+                // Rate limits are safe to notify
+                await client.sendMessage(msg.from, '🤖 ⚠️ מגבלת API זמנית (429). נסה שוב בעוד דקה.');
+            }
         }
     } catch (error) {
         console.error('❌ Error handling message:', error);
