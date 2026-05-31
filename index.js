@@ -220,10 +220,18 @@ async function createCalendarEvent(title, startTimeISO, endTimeISO, description 
             },
             end: {
                 dateTime: new Date(endTimeISO).toISOString(),
-            }
+            },
+            attendees: [{ email: 'advak19@gmail.com' }]
         };
 
         if (attendeeEmails && attendeeEmails.length > 0) {
+            // Add any extra attendees on top of the default (Adva)
+            for (const email of attendeeEmails) {
+                const trimmed = email.trim();
+                if (trimmed && trimmed !== 'advak19@gmail.com') {
+                    event.attendees.push({ email: trimmed });
+                }
+            }
             const emailsText = attendeeEmails.map(email => email.trim()).join(', ');
             event.description = event.description 
                 ? `${event.description}\n\nמוזמנים (אימיילים): ${emailsText}` 
@@ -232,11 +240,12 @@ async function createCalendarEvent(title, startTimeISO, endTimeISO, description 
 
         let response;
         try {
-            console.error(`[TOOL] Inserting event to calendar: ${calendarId} (without attendees array)`);
+            console.error(`[TOOL] Inserting event to calendar: ${calendarId}`);
             console.log(' - Inserting event to Google Calendar...');
             response = await calendarClient.events.insert({
                 calendarId: calendarId,
-                resource: event
+                resource: event,
+                sendUpdates: 'all'
             });
             console.log(' - Event inserted successfully. Link:', response.data.htmlLink);
         } catch (error) {
@@ -909,6 +918,8 @@ function buildGeminiToolsAndConfig() {
             `- Use 'sendEmail' to send emails.\n` +
             `- Use 'addTask' and 'readTasks' to manage his To-Do list on the 'מטלות' sheet.\n` +
             `- Continue managing his calendar, shopping list, and reminders.\n` +
+            `- You also listen to the shared WhatsApp group 'קניות+משימות לבית' for shopping and task requests from Aviad or Adva.\n` +
+            `- All calendar events automatically invite Adva (advak19@gmail.com).\n` +
             `- If Aviad asks to send a message at a specific time or with a delay, use the 'scheduleWhatsAppMessage' tool and calculate the correct ISO time.\n` +
             `- If he just says 'send a message' without a time, use 'sendWhatsAppMessage'.\n` +
             `- If he talks about sailing, taking a boat, or asks about the sea/weather, infer that he needs marine conditions and proactively use the 'checkMarineWeather' tool to give him the forecast for Jaffa Port.\n` +
@@ -1107,31 +1118,33 @@ client.on('ready', () => {
 // --- Message Listener ---
 client.on('message_create', async (msg) => {
     try {
-        // Only process messages in the "Notes to Self" (Me-chat)
+        // Determine message source
         const myNumber = client.info.wid._serialized;
         const myLid = '230575336079579@lid';
+        const chat = await msg.getChat();
         const isNotesToSelf = msg.fromMe && (msg.to === myNumber || msg.to === myLid);
+        const isSharedGroup = chat.isGroup && chat.name === 'קניות+משימות לבית';
 
-        if (!isNotesToSelf) return;
-        if (msg.body && msg.body.startsWith('🤖')) return; // Prevent the bot from replying to its own answers
+        if (!isNotesToSelf && !isSharedGroup) return;
+        if (msg.body && msg.body.startsWith('🤖')) return; // Prevent bot loop
 
-        // DEBUG log — only fires for relevant (self-chat) messages
-        console.log(`[DEBUG] Message caught! From: ${msg.from} | To: ${msg.to} | FromMe: ${msg.fromMe} | Body: ${msg.body}`);
+        // Choose the correct reply target
+        const replyTarget = isSharedGroup ? chat.id._serialized : msg.from;
+
+        // DEBUG log — only fires for relevant messages
+        console.log(`[DEBUG] Message caught! From: ${msg.from} | To: ${msg.to} | FromMe: ${msg.fromMe} | Group: ${chat.name || 'N/A'} | Body: ${msg.body}`);
 
         const body = msg.body || '';
 
-        // Ignore bot's own replies (loop prevention)
-        if (body.trim().startsWith('🤖')) return;
-
         // Write directly to file to bypass process output buffering
-        const logMsg = `[LOG] ${new Date().toISOString()} from="${msg.from}" to="${msg.to}" fromMe=${msg.fromMe} body="${body.substring(0, 80)}"\n`;
+        const logMsg = `[LOG] ${new Date().toISOString()} from="${msg.from}" to="${msg.to}" fromMe=${msg.fromMe} group="${chat.name || ''}" body="${body.substring(0, 80)}"\n`;
         fs.appendFileSync(path.join(__dirname, 'bot.log'), logMsg);
 
         // --- Voice Message Handling ---
         const isVoiceMessage = msg.hasMedia && (msg.type === 'ptt' || msg.type === 'audio');
         if (isVoiceMessage) {
             console.log('1. 🎙️ Voice message detected! Downloading audio...');
-            console.error(`🎙️ Voice message received in self-chat`);
+            console.error(`🎙️ Voice message received in ${isSharedGroup ? 'shared group' : 'self-chat'}`);
             try {
                 const media = await msg.downloadMedia();
                 if (media && media.data) {
@@ -1141,12 +1154,12 @@ client.on('message_create', async (msg) => {
                     const replyText = await callGeminiWithVoice(media.data, mimeType);
                     if (replyText) {
                         const finalReply = `🤖 ${replyText}`;
-                        await client.sendMessage(msg.from, finalReply);
+                        await client.sendMessage(replyTarget, finalReply);
                         console.error(`✅ Replied to voice: "${finalReply.substring(0, 100)}"`);
                     }
                 } else {
                     console.error('❌ Failed to download voice message media');
-                    await client.sendMessage(msg.from, '🤖 ❌ לא הצלחתי להוריד את ההודעה הקולית. נסה שוב.');
+                    await client.sendMessage(replyTarget, '🤖 ❌ לא הצלחתי להוריד את ההודעה הקולית. נסה שוב.');
                 }
             } catch (voiceErr) {
                 console.error('[ERROR] Failed to send reply:', voiceErr);
@@ -1165,13 +1178,13 @@ client.on('message_create', async (msg) => {
         }
 
         console.log('1. Processing message:', userMessage);
-        console.error(`✉️  Me-chat message: "${userMessage}"`);
+        console.error(`✉️  Message in ${isSharedGroup ? 'shared group' : 'self-chat'}: "${userMessage}"`);
 
         try {
             const replyText = await callGeminiWithTools(userMessage);
             if (replyText) {
                 const finalReply = `🤖 ${replyText}`;
-                await client.sendMessage(msg.from, finalReply);
+                await client.sendMessage(replyTarget, finalReply);
                 console.error(`✅ Replied: "${finalReply.substring(0, 100)}"`);
             }
         } catch (error) {
@@ -1179,7 +1192,7 @@ client.on('message_create', async (msg) => {
             // Intentionally NOT sending error message to WhatsApp to prevent loop crashes
             if (error.status === 429) {
                 // Rate limits are safe to notify
-                await client.sendMessage(msg.from, '🤖 ⚠️ מגבלת API זמנית (429). נסה שוב בעוד דקה.');
+                await client.sendMessage(replyTarget, '🤖 ⚠️ מגבלת API זמנית (429). נסה שוב בעוד דקה.');
             }
         }
     } catch (error) {
