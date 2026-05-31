@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const schedule = require('node-schedule');
 const { google } = require('googleapis');
+const nodemailer = require('nodemailer');
 
 // Load .env file manually if it exists
 try {
@@ -481,6 +482,91 @@ async function findContactNumber(name) {
 }
 
 /**
+ * sendEmail: sends an email using nodemailer
+ */
+async function sendEmail(toEmail, subject, bodyText) {
+    console.error(`[TOOL] sendEmail → to: "${toEmail}", subject: "${subject}"`);
+    try {
+        if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASS) {
+            return "Failed to send email: GMAIL_USER or GMAIL_APP_PASS is not configured.";
+        }
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: process.env.GMAIL_USER,
+                pass: process.env.GMAIL_APP_PASS
+            }
+        });
+        const info = await transporter.sendMail({
+            from: process.env.GMAIL_USER,
+            to: toEmail,
+            subject: subject,
+            text: bodyText
+        });
+        console.error(`[TOOL] ✅ Email sent: ${info.messageId}`);
+        return `Email sent successfully to ${toEmail}`;
+    } catch (err) {
+        console.error(`[TOOL] ❌ Failed to send email:`, err.message);
+        return `Failed to send email: ${err.message}`;
+    }
+}
+
+/**
+ * addTask: adds tasks to the Tasks sheet
+ */
+async function addTask(tasks) {
+    console.error(`[TOOL] addTask → tasks:`, tasks);
+    if (!sheetsClient) {
+        return "Failed to add tasks: Google Sheets is not configured.";
+    }
+    if (!tasks || !Array.isArray(tasks) || tasks.length === 0) {
+        return "No tasks provided.";
+    }
+    try {
+        const values = tasks.map(task => [task.trim()]);
+        await sheetsClient.spreadsheets.values.append({
+            spreadsheetId: SPREADSHEET_ID,
+            range: 'מטלות!A:A',
+            valueInputOption: 'USER_ENTERED',
+            requestBody: { values }
+        });
+        console.error(`[TOOL] ✅ Added ${tasks.length} tasks.`);
+        return `הוספו בהצלחה ${tasks.length} מטלות.`;
+    } catch (err) {
+        console.error(`[TOOL] ❌ Failed to add tasks:`, err.message);
+        return `Failed to add tasks: ${err.message}`;
+    }
+}
+
+/**
+ * readTasks: reads tasks from the Tasks sheet
+ */
+async function readTasks() {
+    console.error(`[TOOL] readTasks`);
+    if (!sheetsClient) {
+        return "Failed to read tasks: Google Sheets is not configured.";
+    }
+    try {
+        const response = await sheetsClient.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range: 'מטלות!A:A'
+        });
+        const rows = response.data.values;
+        if (!rows || rows.length === 0) {
+            return "רשימת המטלות ריקה.";
+        }
+        const items = rows.map(row => row[0]).filter(item => item && item.trim() !== '');
+        if (items.length === 0) {
+            return "רשימת המטלות ריקה.";
+        }
+        return `רשימת המטלות שלך:\n` + items.map((item, idx) => `${idx + 1}. ${item}`).join('\n');
+    } catch (err) {
+        console.error(`[TOOL] ❌ Failed to read tasks:`, err.message);
+        return `Failed to read tasks: ${err.message}`;
+    }
+}
+
+/**
  * sendDailyEveningSummary: generates and sends a daily evening summary to the user's self-chat
  */
 async function sendDailyEveningSummary() {
@@ -575,7 +661,10 @@ const toolHandlers = {
     readShoppingList: () => readShoppingList(),
     clearShoppingList: () => clearShoppingList(),
     removeFromShoppingList: ({ items }) => removeFromShoppingList(items),
-    findContactNumber: ({ name }) => findContactNumber(name)
+    findContactNumber: ({ name }) => findContactNumber(name),
+    sendEmail: ({ toEmail, subject, bodyText }) => sendEmail(toEmail, subject, bodyText),
+    addTask: ({ tasks }) => addTask(tasks),
+    readTasks: () => readTasks()
 };
 
 // --- Chat Session State ---
@@ -612,7 +701,9 @@ async function sendMessageWithRetry(chat, messagePayload, retries = 2, delay = 2
 function buildGeminiToolsAndConfig() {
     const currentTime = new Date().toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
 
-    const tools = [{
+    const tools = [
+        { googleSearch: {} },
+        {
         functionDeclarations: [
             {
                 name: 'sendWhatsAppMessage',
@@ -775,13 +866,52 @@ function buildGeminiToolsAndConfig() {
                     },
                     required: ['name']
                 }
+            },
+            {
+                name: 'sendEmail',
+                description: 'Sends an email using Gmail.',
+                parameters: {
+                    type: 'OBJECT',
+                    properties: {
+                        toEmail: { type: 'STRING' },
+                        subject: { type: 'STRING' },
+                        bodyText: { type: 'STRING' }
+                    },
+                    required: ['toEmail', 'subject', 'bodyText']
+                }
+            },
+            {
+                name: 'addTask',
+                description: 'Adds one or multiple tasks to the To-Do list.',
+                parameters: {
+                    type: 'OBJECT',
+                    properties: {
+                        tasks: {
+                            type: 'ARRAY',
+                            items: { type: 'STRING' }
+                        }
+                    },
+                    required: ['tasks']
+                }
+            },
+            {
+                name: 'readTasks',
+                description: 'Reads the list of all tasks currently in the To-Do list.',
+                parameters: {
+                    type: 'OBJECT',
+                    properties: {}
+                }
             }
         ]
     }];
 
     const dynamicConfig = {
         systemInstruction:
-            `You are Aviad's personal AI assistant on WhatsApp. Always answer in Hebrew. The current time is ${currentTime}.\n` +
+            `You are Aviad's Executive Assistant. You answer in Hebrew. The current time is ${currentTime}.\n` +
+            `- Use 'googleSearch' to answer questions with live information.\n` +
+            `- Use 'sendEmail' to send emails.\n` +
+            `- Use 'addTask' and 'readTasks' to manage his To-Do list on the 'מטלות' sheet.\n` +
+            `- Continue managing his calendar, shopping list, and reminders.\n` +
             `- If Aviad asks to send a message at a specific time or with a delay, use the 'scheduleWhatsAppMessage' tool and calculate the correct ISO time.\n` +
             `- If he just says 'send a message' without a time, use 'sendWhatsAppMessage'.\n` +
             `- If he talks about sailing, taking a boat, or asks about the sea/weather, infer that he needs marine conditions and proactively use the 'checkMarineWeather' tool to give him the forecast for Jaffa Port.\n` +
@@ -817,8 +947,7 @@ async function processGeminiToolLoop(response, dynamicConfig) {
             responseParts.push({
                 functionResponse: {
                     name: call.name,
-                    response: { result },
-                    id: call.id
+                    response: { result }
                 }
             });
         }
