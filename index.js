@@ -959,7 +959,7 @@ client.on('qr', (qr) => {
 });
 
 client.on('ready', () => {
-    console.log('🤖 Bot Version: LOCAL_SYNC_1.0');
+    console.log('🤖 Bot Version: LOCAL_SYNC_2.0');
     console.error('✅ WhatsApp Agent is ready! 🚀');
     console.error('✅ Client info details:', JSON.stringify(client.info));
     try {
@@ -983,7 +983,7 @@ client.on('message_create', async (msg) => {
     try {
         // Only process messages in the "Notes to Self" (Me-chat)
         const myNumber = client.info.wid._serialized;
-        const isNotesToSelf = (msg.fromMe && msg.to === myNumber) || (msg.from === myNumber && msg.to === myNumber);
+        const isNotesToSelf = msg.fromMe && (msg.to === myNumber || msg.to.includes('@lid'));
         if (!isNotesToSelf) return;
 
         // DEBUG log — only fires for relevant (self-chat) messages
