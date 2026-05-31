@@ -1109,8 +1109,11 @@ client.on('message_create', async (msg) => {
     try {
         // Only process messages in the "Notes to Self" (Me-chat)
         const myNumber = client.info.wid._serialized;
-        const isNotesToSelf = msg.fromMe && (msg.to === myNumber || msg.to.includes('@lid'));
+        const myLid = '230575336079579@lid';
+        const isNotesToSelf = msg.fromMe && (msg.to === myNumber || msg.to === myLid);
+
         if (!isNotesToSelf) return;
+        if (msg.body && msg.body.startsWith('🤖')) return; // Prevent the bot from replying to its own answers
 
         // DEBUG log — only fires for relevant (self-chat) messages
         console.log(`[DEBUG] Message caught! From: ${msg.from} | To: ${msg.to} | FromMe: ${msg.fromMe} | Body: ${msg.body}`);
