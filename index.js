@@ -980,30 +980,21 @@ client.on('ready', () => {
 // --- Message Listener ---
 client.on('message_create', async (msg) => {
     try {
-        // Restrict bot responses EXCLUSIVELY to the user's own messages in the self-chat (Me-chat)
-        if (msg.fromMe !== true) return;
+        // Only process messages sent by the user themselves in their own self-chat (Me-chat)
+        if (msg.from !== msg.to) return;
 
         const remote = msg.id?.remote || '';
         const body   = msg.body || '';
 
-        const selfJid = client.info?.wid?._serialized;
-        const isSelfChat = selfJid ? (remote === selfJid) : (msg.from === msg.to);
-        if (!isSelfChat) return;
+        // Clear log line to confirm the bot received the message — visible in server logs
+        console.log(`[✅ ME-CHAT] Message received: "${body.substring(0, 120)}"`);
+
+        // Ignore bot's own replies (loop prevention)
+        if (body.trim().startsWith('🤖')) return;
 
         // Write directly to file to bypass process output buffering
         const logMsg = `[LOG] ${new Date().toISOString()} remote="${remote}" from="${msg.from}" to="${msg.to}" fromMe=${msg.fromMe} body="${body.substring(0, 80)}"\n`;
         fs.appendFileSync(path.join(__dirname, 'bot.log'), logMsg);
-
-        console.error(`[DEBUG] remote="${remote}" fromMe=${msg.fromMe} body="${body.substring(0, 80)}"`);
-
-        // Normalize msg.from to match msg.id.remote for self-chat to satisfy the requested protection rule
-        msg.from = remote;
-
-        // Keep the protection rules:
-        if (msg.id.remote !== msg.from) return;
-
-        // Ignore bot's own replies (loop prevention)
-        if (body.trim().startsWith('🤖')) return;
 
         // --- Voice Message Handling ---
         const isVoiceMessage = msg.hasMedia && (msg.type === 'ptt' || msg.type === 'audio');
@@ -1042,7 +1033,7 @@ client.on('message_create', async (msg) => {
             return;
         }
 
-        console.log('1. Processing message:', msg.body);
+        console.log('1. Processing message:', userMessage);
         console.error(`✉️  Me-chat message: "${userMessage}"`);
 
         const replyText = await callGeminiWithTools(userMessage);
