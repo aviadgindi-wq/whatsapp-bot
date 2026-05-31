@@ -959,6 +959,7 @@ client.on('qr', (qr) => {
 });
 
 client.on('ready', () => {
+    console.log('🤖 Bot Version: LOCAL_SYNC_1.0');
     console.error('✅ WhatsApp Agent is ready! 🚀');
     console.error('✅ Client info details:', JSON.stringify(client.info));
     try {
