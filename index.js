@@ -981,25 +981,21 @@ client.on('ready', () => {
 // --- Message Listener ---
 client.on('message_create', async (msg) => {
     try {
-        // RAW DEBUG — fires for every single message before any filtering
-        console.log(`[DEBUG] Message caught! From: ${msg.from} | To: ${msg.to} | FromMe: ${msg.fromMe} | Body: ${msg.body}`);
-
         // Only process messages in the "Notes to Self" (Me-chat)
         const myNumber = client.info.wid._serialized;
         const isNotesToSelf = (msg.fromMe && msg.to === myNumber) || (msg.from === myNumber && msg.to === myNumber);
         if (!isNotesToSelf) return;
 
-        const remote = msg.id?.remote || '';
-        const body   = msg.body || '';
+        // DEBUG log — only fires for relevant (self-chat) messages
+        console.log(`[DEBUG] Message caught! From: ${msg.from} | To: ${msg.to} | FromMe: ${msg.fromMe} | Body: ${msg.body}`);
 
-        // Clear log line to confirm the bot received the message — visible in server logs
-        console.log(`[✅ ME-CHAT] Message received: "${body.substring(0, 120)}"`);
+        const body = msg.body || '';
 
         // Ignore bot's own replies (loop prevention)
         if (body.trim().startsWith('🤖')) return;
 
         // Write directly to file to bypass process output buffering
-        const logMsg = `[LOG] ${new Date().toISOString()} remote="${remote}" from="${msg.from}" to="${msg.to}" fromMe=${msg.fromMe} body="${body.substring(0, 80)}"\n`;
+        const logMsg = `[LOG] ${new Date().toISOString()} from="${msg.from}" to="${msg.to}" fromMe=${msg.fromMe} body="${body.substring(0, 80)}"\n`;
         fs.appendFileSync(path.join(__dirname, 'bot.log'), logMsg);
 
         // --- Voice Message Handling ---
@@ -1012,20 +1008,20 @@ client.on('message_create', async (msg) => {
                 if (media && media.data) {
                     const mimeType = media.mimetype || 'audio/ogg';
                     console.error(`🎙️ Audio downloaded: ${mimeType}, size: ${media.data.length} chars (base64)`);
-                    
+
                     const replyText = await callGeminiWithVoice(media.data, mimeType);
                     if (replyText) {
                         const finalReply = `🤖 ${replyText}`;
-                        await client.sendMessage(remote, finalReply);
+                        await client.sendMessage(msg.from, finalReply);
                         console.error(`✅ Replied to voice: "${finalReply.substring(0, 100)}"`);
                     }
                 } else {
                     console.error('❌ Failed to download voice message media');
-                    await client.sendMessage(remote, '🤖 ❌ לא הצלחתי להוריד את ההודעה הקולית. נסה שוב.');
+                    await client.sendMessage(msg.from, '🤖 ❌ לא הצלחתי להוריד את ההודעה הקולית. נסה שוב.');
                 }
             } catch (voiceErr) {
-                console.error('❌ Error processing voice message:', voiceErr);
-                await client.sendMessage(remote, `🤖 ❌ שגיאה בעיבוד ההודעה הקולית: ${voiceErr.message?.substring(0, 80) || 'שגיאה לא ידועה'}`);
+                console.error('[ERROR] Failed to send reply:', voiceErr);
+                await client.sendMessage(msg.from, `🤖 ❌ שגיאה בעיבוד ההודעה הקולית: ${voiceErr.message?.substring(0, 80) || 'שגיאה לא ידועה'}`);
             }
             return;
         }
@@ -1042,24 +1038,22 @@ client.on('message_create', async (msg) => {
         console.log('1. Processing message:', userMessage);
         console.error(`✉️  Me-chat message: "${userMessage}"`);
 
-        const replyText = await callGeminiWithTools(userMessage);
-        if (replyText) {
-            const finalReply = `🤖 ${replyText}`;
-            await client.sendMessage(remote, finalReply);
-            console.error(`✅ Replied: "${finalReply.substring(0, 100)}"`);
+        try {
+            const replyText = await callGeminiWithTools(userMessage);
+            if (replyText) {
+                const finalReply = `🤖 ${replyText}`;
+                await client.sendMessage(msg.from, finalReply);
+                console.error(`✅ Replied: "${finalReply.substring(0, 100)}"`);
+            }
+        } catch (error) {
+            console.error('[ERROR] Failed to send reply:', error);
+            const errMsg = error.status === 429
+                ? '🤖 ⚠️ מגבלת API זמנית (429). נסה שוב בעוד דקה.'
+                : `🤖 ❌ שגיאה: ${error.message?.substring(0, 100) || 'שגיאה לא ידועה'}`;
+            await client.sendMessage(msg.from, errMsg);
         }
     } catch (error) {
         console.error('❌ Error handling message:', error);
-        // Notify the user in chat about the error
-        try {
-            const remote = msg.id?.remote || '';
-            if (remote) {
-                const errMsg = error.status === 429
-                    ? '🤖 ⚠️ מגבלת API זמנית (429). נסה שוב בעוד דקה.'
-                    : `🤖 ❌ שגיאה: ${error.message?.substring(0, 100) || 'שגיאה לא ידועה'}`;
-                await client.sendMessage(remote, errMsg);
-            }
-        } catch (_) { /* ignore */ }
     }
 });
 
