@@ -38,27 +38,25 @@ if (apiKey === 'YOUR_GEMINI_API_KEY' || !apiKey) {
 const ai = new GoogleGenAI({ apiKey });
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
-// --- Initialize Google API Clients (Calendar & Sheets) ---
+// --- Initialize Google API Clients (Calendar, Sheets, Gmail) via OAuth2 ---
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID || '1jAWciAo56NYGC5fMQvpRE-qwWcj3FGq_p1U38RRonSo';
 let calendarClient = null;
 let sheetsClient = null;
+let gmailClient = null;
 try {
-    const credentialsPath = path.join(__dirname, 'calendar-credentials.json');
-    if (fs.existsSync(credentialsPath)) {
-        const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
-        const auth = google.auth.fromJSON(credentials);
-        auth.scopes = [
-            'https://www.googleapis.com/auth/calendar',
-            'https://www.googleapis.com/auth/spreadsheets'
-        ];
-        calendarClient = google.calendar({ version: 'v3', auth });
-        sheetsClient = google.sheets({ version: 'v4', auth });
-        console.error('✅ Google Calendar & Sheets Auth initialized successfully.');
-    } else {
-        console.error('⚠️ Warning: calendar-credentials.json not found in root.');
-    }
+    const oauth2Client = new google.auth.OAuth2(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET
+    );
+    oauth2Client.setCredentials({
+        refresh_token: process.env.GOOGLE_REFRESH_TOKEN
+    });
+    calendarClient = google.calendar({ version: 'v3', auth: oauth2Client });
+    sheetsClient = google.sheets({ version: 'v4', auth: oauth2Client });
+    gmailClient = google.gmail({ version: 'v1', auth: oauth2Client });
+    console.error('✅ Google OAuth2 initialized (Calendar, Sheets, Gmail).');
 } catch (err) {
-    console.error('❌ Error initializing Google API auth:', err);
+    console.error('❌ Error initializing Google OAuth2 auth:', err);
 }
 
 // 2. Weather & Marine Data helper
@@ -512,6 +510,83 @@ async function sendEmail(toEmail, subject, bodyText) {
 }
 
 /**
+ * listRecentEmails: fetches the 5 most recent unread emails from the inbox
+ */
+async function listRecentEmails() {
+    console.error(`[TOOL] listRecentEmails`);
+    if (!gmailClient) {
+        return "Failed to read emails: Gmail is not configured.";
+    }
+    try {
+        const res = await gmailClient.users.messages.list({
+            userId: 'me',
+            q: 'is:unread in:inbox',
+            maxResults: 5
+        });
+        const messages = res.data.messages;
+        if (!messages || messages.length === 0) {
+            return "אין מיילים שלא נקראו בתיבת הדואר.";
+        }
+        const results = [];
+        for (const msg of messages) {
+            const detail = await gmailClient.users.messages.get({
+                userId: 'me',
+                id: msg.id,
+                format: 'metadata',
+                metadataHeaders: ['From', 'Subject']
+            });
+            const headers = detail.data.payload?.headers || [];
+            const from = headers.find(h => h.name === 'From')?.value || 'Unknown';
+            const subject = headers.find(h => h.name === 'Subject')?.value || '(No Subject)';
+            const snippet = detail.data.snippet || '';
+            results.push(`✉️ מאת: ${from}\nנושא: ${subject}\nתקציר: ${snippet}`);
+        }
+        console.error(`[TOOL] ✅ Fetched ${results.length} recent emails.`);
+        return results.join('\n\n---\n\n');
+    } catch (err) {
+        console.error(`[TOOL] ❌ Failed to list emails:`, err.message);
+        return `Failed to list emails: ${err.message}`;
+    }
+}
+
+/**
+ * createGmailDraft: creates an email draft in Gmail
+ */
+async function createGmailDraft(to, subject, body) {
+    console.error(`[TOOL] createGmailDraft → to: "${to}", subject: "${subject}"`);
+    if (!gmailClient) {
+        return "Failed to create draft: Gmail is not configured.";
+    }
+    try {
+        // Build RFC 2822 formatted email
+        const emailLines = [
+            `To: ${to}`,
+            `Subject: ${subject}`,
+            'Content-Type: text/plain; charset=utf-8',
+            '',
+            body
+        ];
+        const rawMessage = Buffer.from(emailLines.join('\r\n'))
+            .toString('base64')
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .replace(/=+$/, '');
+
+        const res = await gmailClient.users.drafts.create({
+            userId: 'me',
+            requestBody: {
+                message: { raw: rawMessage }
+            }
+        });
+        console.error(`[TOOL] ✅ Draft created: ${res.data.id}`);
+        return `טיוטת אימייל נוצרה בהצלחה ל-${to} עם הנושא: "${subject}"`;
+    } catch (err) {
+        console.error(`[TOOL] ❌ Failed to create draft:`, err.message);
+        return `Failed to create draft: ${err.message}`;
+    }
+}
+
+/**
  * addTask: adds tasks to the Tasks sheet
  */
 async function addTask(tasks) {
@@ -728,7 +803,9 @@ const toolHandlers = {
     sendEmail: ({ toEmail, subject, bodyText }) => sendEmail(toEmail, subject, bodyText),
     addTask: ({ tasks }) => addTask(tasks),
     readTasks: () => readTasks(),
-    fetchWebpageContent: ({ url }) => fetchWebpageContent(url)
+    fetchWebpageContent: ({ url }) => fetchWebpageContent(url),
+    listRecentEmails: () => listRecentEmails(),
+    createGmailDraft: ({ to, subject, body }) => createGmailDraft(to, subject, body)
 };
 
 // --- Chat Session State ---
@@ -977,18 +1054,40 @@ function buildGeminiToolsAndConfig() {
                     },
                     required: ['url']
                 }
+            },
+            {
+                name: 'listRecentEmails',
+                description: 'Fetches the 5 most recent unread emails from the inbox. Returns sender, subject, and a short snippet for each.',
+                parameters: {
+                    type: 'OBJECT',
+                    properties: {}
+                }
+            },
+            {
+                name: 'createGmailDraft',
+                description: 'Creates an email draft in Gmail. The user can review and send it later.',
+                parameters: {
+                    type: 'OBJECT',
+                    properties: {
+                        to: { type: 'STRING', description: 'Recipient email address' },
+                        subject: { type: 'STRING', description: 'Email subject' },
+                        body: { type: 'STRING', description: 'Email body text' }
+                    },
+                    required: ['to', 'subject', 'body']
+                }
             }
         ]
     }];
 
     const dynamicConfig = {
         systemInstruction:
-            `You are Aviad's Executive Assistant. You answer in Hebrew. The current time is ${currentTime}.\n` +
-            `- Use 'sendEmail' to send emails.\n` +
+            `You are Aviad's Executive Assistant and Communication Agent. You answer in Hebrew. The current time is ${currentTime}.\n` +
+            `- Use 'sendEmail' to send emails immediately.\n` +
+            `- Use 'listRecentEmails' when Aviad asks to check his inbox, see recent emails, or asks "מה יש במייל?".\n` +
+            `- Use 'createGmailDraft' when Aviad asks to draft a reply or prepare an email for review.\n` +
             `- Use 'addTask' and 'readTasks' to manage his To-Do list on the 'מטלות' sheet.\n` +
             `- Continue managing his calendar, shopping list, and reminders.\n` +
             `- You also listen to the shared WhatsApp group 'קניות+משימות לבית' for shopping and task requests from Aviad or Adva.\n` +
-            `- All calendar events automatically invite Adva (advak19@gmail.com).\n` +
             `- If Aviad asks to send a message at a specific time or with a delay, use the 'scheduleWhatsAppMessage' tool and calculate the correct ISO time.\n` +
             `- If he just says 'send a message' without a time, use 'sendWhatsAppMessage'.\n` +
             `- If he talks about sailing, taking a boat, or asks about the sea/weather, infer that he needs marine conditions and proactively use the 'checkMarineWeather' tool to give him the forecast for Jaffa Port.\n` +
