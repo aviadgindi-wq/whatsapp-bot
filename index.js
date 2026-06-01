@@ -245,7 +245,7 @@ async function createCalendarEvent(title, startTimeISO, endTimeISO, description 
             response = await calendarClient.events.insert({
                 calendarId: calendarId,
                 resource: event,
-                sendUpdates: 'all'
+                sendUpdates: 'none'
             });
             console.log(' - Event inserted successfully. Link:', response.data.htmlLink);
         } catch (error) {
