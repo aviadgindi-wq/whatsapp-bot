@@ -220,18 +220,10 @@ async function createCalendarEvent(title, startTimeISO, endTimeISO, description 
             },
             end: {
                 dateTime: new Date(endTimeISO).toISOString(),
-            },
-            attendees: [{ email: 'advak19@gmail.com' }]
+            }
         };
 
         if (attendeeEmails && attendeeEmails.length > 0) {
-            // Add any extra attendees on top of the default (Adva)
-            for (const email of attendeeEmails) {
-                const trimmed = email.trim();
-                if (trimmed && trimmed !== 'advak19@gmail.com') {
-                    event.attendees.push({ email: trimmed });
-                }
-            }
             const emailsText = attendeeEmails.map(email => email.trim()).join(', ');
             event.description = event.description 
                 ? `${event.description}\n\nמוזמנים (אימיילים): ${emailsText}` 
@@ -244,8 +236,7 @@ async function createCalendarEvent(title, startTimeISO, endTimeISO, description 
             console.log(' - Inserting event to Google Calendar...');
             response = await calendarClient.events.insert({
                 calendarId: calendarId,
-                resource: event,
-                sendUpdates: 'none'
+                resource: event
             });
             console.log(' - Event inserted successfully. Link:', response.data.htmlLink);
         } catch (error) {
