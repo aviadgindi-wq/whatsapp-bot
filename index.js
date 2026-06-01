@@ -576,6 +576,69 @@ async function readTasks() {
 }
 
 /**
+ * fetchWebpageContent: fetches a webpage and extracts its text content
+ */
+async function fetchWebpageContent(url) {
+    console.error(`[TOOL] fetchWebpageContent → url: "${url}"`);
+    try {
+        // Validate URL
+        const parsed = new URL(url);
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+            return 'Invalid URL: only http and https protocols are supported.';
+        }
+
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (compatible; AviadBot/1.0)',
+                'Accept': 'text/html,application/xhtml+xml,text/plain'
+            },
+            signal: AbortSignal.timeout(15000) // 15s timeout
+        });
+
+        if (!response.ok) {
+            return `Failed to fetch URL: HTTP ${response.status} ${response.statusText}`;
+        }
+
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('text/') && !contentType.includes('html') && !contentType.includes('json')) {
+            return `Cannot read this URL: content type is ${contentType} (not text/HTML).`;
+        }
+
+        let html = await response.text();
+
+        // Strip HTML to extract text
+        // Remove script and style blocks entirely
+        html = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+        html = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+        // Remove HTML comments
+        html = html.replace(/<!--[\s\S]*?-->/g, '');
+        // Replace block-level tags with newlines
+        html = html.replace(/<\/(p|div|h[1-6]|li|tr|br|hr)[^>]*>/gi, '\n');
+        html = html.replace(/<(br|hr)[^>]*\/?>/gi, '\n');
+        // Strip remaining tags
+        html = html.replace(/<[^>]+>/g, '');
+        // Decode common HTML entities
+        html = html.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ');
+        // Collapse whitespace
+        html = html.replace(/[ \t]+/g, ' ');
+        html = html.replace(/(\n\s*){3,}/g, '\n\n');
+        const text = html.trim();
+
+        // Limit to ~8000 chars to stay within token budget
+        const truncated = text.length > 8000 ? text.substring(0, 8000) + '\n\n[... content truncated ...]' : text;
+
+        console.error(`[TOOL] ✅ Fetched ${url}: ${text.length} chars (sent ${truncated.length} chars)`);
+        return truncated;
+    } catch (err) {
+        console.error(`[TOOL] ❌ Failed to fetch webpage:`, err.message);
+        if (err.name === 'TimeoutError' || err.code === 'ABORT_ERR') {
+            return `Failed to fetch URL: request timed out after 15 seconds.`;
+        }
+        return `Failed to fetch URL: ${err.message}`;
+    }
+}
+
+/**
  * sendDailyEveningSummary: generates and sends a daily evening summary to the user's self-chat
  */
 async function sendDailyEveningSummary() {
@@ -673,7 +736,8 @@ const toolHandlers = {
     findContactNumber: ({ name }) => findContactNumber(name),
     sendEmail: ({ toEmail, subject, bodyText }) => sendEmail(toEmail, subject, bodyText),
     addTask: ({ tasks }) => addTask(tasks),
-    readTasks: () => readTasks()
+    readTasks: () => readTasks(),
+    fetchWebpageContent: ({ url }) => fetchWebpageContent(url)
 };
 
 // --- Chat Session State ---
@@ -908,6 +972,20 @@ function buildGeminiToolsAndConfig() {
                     type: 'OBJECT',
                     properties: {}
                 }
+            },
+            {
+                name: 'fetchWebpageContent',
+                description: 'Fetches a webpage URL and returns its text content. Use this to read articles, blog posts, news pages, or any link the user sends.',
+                parameters: {
+                    type: 'OBJECT',
+                    properties: {
+                        url: {
+                            type: 'STRING',
+                            description: 'The full URL of the webpage to fetch (must start with http:// or https://)'
+                        }
+                    },
+                    required: ['url']
+                }
             }
         ]
     }];
@@ -928,7 +1006,8 @@ function buildGeminiToolsAndConfig() {
             `- If he asks for the evening summary ("הערב", "סיכום ערב", "בוא נחבר את הערב", etc.), use BOTH 'checkMarineWeather' and 'getUpcomingEvents' (for tomorrow) to generate a short, energetic Hebrew evening summary including today's wrap-up, tomorrow's holiday/weather forecast/schedule, and prep reminders in a single response.\n` +
             `- If you receive a voice message transcription, treat it exactly like a regular text message. Process the user's intent from the transcription and respond accordingly.\n` +
             `- You also manage Aviad's shopping list. Use 'addToShoppingList' to add one or multiple groceries. Use 'readShoppingList' when he asks what to buy. Use 'clearShoppingList' to empty the entire list. Use 'removeFromShoppingList' to remove one or multiple specific items when he asks to delete or remove them from the list.\n` +
-            `- IMPORTANT: When Aviad asks to send a message to someone by NAME (not phone number), you MUST first use 'findContactNumber' to look up their WhatsApp contact ID. Then use the returned contactId as the phoneNumber in 'sendWhatsAppMessage'. Never ask for a phone number if a name was provided — always search first.`,
+            `- IMPORTANT: When Aviad asks to send a message to someone by NAME (not phone number), you MUST first use 'findContactNumber' to look up their WhatsApp contact ID. Then use the returned contactId as the phoneNumber in 'sendWhatsAppMessage'. Never ask for a phone number if a name was provided — always search first.\n` +
+            `- RESEARCH AGENT: You can read webpages using 'fetchWebpageContent'. When Aviad sends a URL/link, AUTOMATICALLY trigger this tool to read its content, then provide a concise summary in 3 bullet points in Hebrew. If he asks a specific question about a link, read the page and answer based on the content.`,
         tools: tools
     };
 
